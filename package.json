@@ -1,0 +1,31 @@
+{
+  "name": "pi-elitea",
+  "version": "1.0.0",
+  "description": "Pi extension for ELITEA enterprise AI gateway provider",
+  "keywords": [
+    "pi-package",
+    "elitea",
+    "llm-gateway",
+    "epam"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pgciq/pi-elitea"
+  },
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
