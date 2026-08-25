@@ -1,6 +1,6 @@
 {
   "name": "pi-elitea",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Pi extension for ELITEA enterprise AI gateway provider",
   "keywords": [
     "pi-package",
