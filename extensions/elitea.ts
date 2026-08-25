@@ -24,7 +24,18 @@ const DEFAULT_PROJECT_ID = "1";
 // Model conversion
 // ---------------------------------------------------------------------------
 
-function modelFromConfig(item: any) {
+/** Claude models served via Bedrock need adaptive thinking, not standard enabled. */
+function needsAdaptiveThinking(name: string) {
+  return /claude-sonnet-5/i.test(name)
+    || /claude-sonnet-4-[6-9]/i.test(name)
+    || /claude-opus-4-[6-9]/i.test(name)
+    || /claude-opus-5/i.test(name);
+}
+
+function modelFromConfig(item: any, baseUrl: string, projectId: string) {
+  const isClaude = /claude/i.test(item.name);
+  const adaptive = isClaude && needsAdaptiveThinking(item.name);
+
   const entry: any = {
     id:            item.name,
     name:          item.display_name || item.name,
@@ -33,10 +44,24 @@ function modelFromConfig(item: any) {
     cost:          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: item.context_window  ?? 128_000,
     maxTokens:     item.max_output_tokens ?? 4_096,
-    // carry through for /elitea-models display
     _tier:         item.high_tier ? "high" : item.low_tier ? "low" : "",
     _default:      !!item.default,
   };
+
+  if (isClaude) {
+    // Route all Claude models to native Anthropic Messages protocol.
+    // ELITEA accepts Authorization: Bearer at /llm/v1/messages (ignores x-api-key).
+    entry.api     = "anthropic-messages";
+    // pi appends /v1/messages to baseUrl, so use /llm (not /llm/v1)
+    // → https://next.elitea.ai/llm/v1/messages  ✓
+    entry.baseUrl = `${baseUrl}/llm`;
+    entry.headers = { Authorization: "Bearer $ELITEA_API_TOKEN", "OpenAI-Project": projectId };
+    entry.compat = {
+      supportsEagerToolInputStreaming: false,
+      ...(adaptive ? { forceAdaptiveThinking: true } : {}),
+    };
+  }
+
   if (entry.reasoning) {
     entry.thinkingLevelMap = {
       off: null, minimal: "low", low: "low",
@@ -140,13 +165,13 @@ export default async function (pi) {
     if (usageProjectId) {
       try {
         const { items, meta } = await fetchConfigModels(baseUrl, token, usageProjectId);
-        entries    = items.map(modelFromConfig);
+        entries    = items.map((item) => modelFromConfig(item, baseUrl, projectId));
         configMeta = meta;
       } catch (err) {
         console.error(`[elitea] Configurations API failed (${err instanceof Error ? err.message : err}), trying /llm/v1/models.`);
       }
     }
-    // Fallback: basic OpenAI models list
+    // Fallback: basic list — no Claude routing or adaptive-thinking metadata here
     if (entries.length === 0) {
       try {
         entries = await fetchLlmModels(baseUrl, token, projectId);
@@ -177,10 +202,12 @@ export default async function (pi) {
 
   // ---- Provider registration -----------------------------------------------
 
-  const models = entries.map(({ _tier, _default, ...entry }) => ({
-    ...entry,
-    compat: { ...entry.compat, supportsReasoningEffort: true },
-  }));
+  const models = entries.map(({ _tier, _default, ...entry }) => {
+    // Claude uses anthropic-messages — don't add supportsReasoningEffort (triggers
+    // reasoning_effort → ELITEA converts to thinking.type:enabled → Bedrock 400).
+    if (entry.api === "anthropic-messages") return entry;
+    return { ...entry, compat: { ...entry.compat, supportsReasoningEffort: true } };
+  });
 
   pi.registerProvider("elitea", {
     name: "ELITEA",
