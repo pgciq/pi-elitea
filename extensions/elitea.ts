@@ -1,11 +1,11 @@
 // ELITEA provider — https://next.elitea.ai
 //
 // Auth (env vars only — no browser SSO):
-//   ELITEA_API_TOKEN        — Personal Access Token (PAT). Required.
+//   ELITEA_API_TOKEN        — Personal Access Token (PAT). Required. https://next.elitea.ai/app/settings/tokens
 //                             Obtain via Settings → Personal Tokens → + in the ELITEA UI.
 //   ELITEA_BASE_URL         — Override instance URL. Default: https://next.elitea.ai
 //   ELITEA_PROJECT_ID       — Value sent as "OpenAI-Project" header. Default: "1"
-//   ELITEA_USAGE_PROJECT_ID — Numeric ELITEA workspace project ID (e.g. 5868).
+//   ELITEA_USAGE_PROJECT_ID — Numeric ELITEA workspace project ID (e.g. 4321). from https://next.elitea.ai/app/settings/project-general
 //                             Enables rich model discovery, /elitea-usage, and status bar.
 //   ELITEA_MODEL            — Static fallback model id when live model discovery fails.
 //
@@ -237,7 +237,7 @@ export default async function (pi) {
   } else {
     console.error(
       "[elitea] ELITEA_USAGE_PROJECT_ID not set — /elitea-usage and status bar disabled.\n" +
-      "         Set it to your numeric ELITEA project ID (e.g. ELITEA_USAGE_PROJECT_ID=5868)."
+      "         Set it to your numeric ELITEA project ID (e.g. ELITEA_USAGE_PROJECT_ID=1234). From https://next.elitea.ai/app/settings/project-general"
     );
   }
 }

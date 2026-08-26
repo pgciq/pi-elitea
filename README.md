@@ -24,15 +24,15 @@ pi install npm:pi-elitea
 
 | Variable | Description |
 |---|---|
-| `ELITEA_API_TOKEN` | **Required.** Personal Access Token. |
-| `ELITEA_USAGE_PROJECT_ID` | **Recommended.** Numeric ELITEA project ID (e.g. `5868`). Enables rich model discovery, `/elitea-usage`, and the status bar. |
+| `ELITEA_API_TOKEN` | **Required.** Personal Access Token. https://next.elitea.ai/app/settings/tokens |
+| `ELITEA_USAGE_PROJECT_ID` | **Recommended.** Numeric ELITEA project ID (e.g. `4321`). Enables rich model discovery, https://next.elitea.ai/app/settings/project-general `/elitea-usage`, and the status bar. |
 | `ELITEA_BASE_URL` | Override instance URL. Default: `https://next.elitea.ai`. |
 | `ELITEA_PROJECT_ID` | `OpenAI-Project` header value. Default: `"1"`. |
 | `ELITEA_MODEL` | Static fallback model id when discovery fails. |
 
 ```bash
-export ELITEA_API_TOKEN="your-pat-here"
-export ELITEA_USAGE_PROJECT_ID="5868"   # your ELITEA workspace project ID
+export ELITEA_API_TOKEN="your-pat-here" # https://next.elitea.ai/app/settings/tokens
+export ELITEA_USAGE_PROJECT_ID="4321"   # your ELITEA workspace project ID, https://next.elitea.ai/app/settings/project-general
 ```
 
 ## Usage
