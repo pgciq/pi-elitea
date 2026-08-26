@@ -8,6 +8,7 @@
 //   ELITEA_USAGE_PROJECT_ID — Numeric ELITEA workspace project ID (e.g. 5868).
 //                             Enables rich model discovery, /elitea-usage, and status bar.
 //   ELITEA_MODEL            — Static fallback model id when live model discovery fails.
+//   ELITEA_OFFLINE          — Set to 1/true/yes to skip startup model discovery.
 //
 // Model discovery (preferred): GET {base}/api/v2/configurations/models/{project}?include_shared=true
 //   → rich metadata: display_name, context_window, max_output_tokens, supports_reasoning,
@@ -19,6 +20,21 @@
 
 const DEFAULT_ELITEA_URL = "https://next.elitea.ai";
 const DEFAULT_PROJECT_ID = "1";
+// Model discovery runs during extension initialization. Keep an unavailable
+// network from blocking Pi startup for an unbounded amount of time.
+const FETCH_TIMEOUT_MS = 5_000;
+
+function isOfflineMode() {
+  return /^(1|true|yes)$/i.test(process.env.ELITEA_OFFLINE || "");
+}
+
+function apiFetch(url: string, headers: Record<string, string>) {
+  return fetch(url, {
+    headers,
+    redirect: "follow",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Model conversion
@@ -112,9 +128,8 @@ function modelFromId(id: string, label?: string) {
 
 async function fetchConfigModels(baseUrl: string, token: string, usageProjectId: string) {
   const url = `${baseUrl}/api/v2/configurations/models/${usageProjectId}?include_shared=true`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    redirect: "follow",
+  const res = await apiFetch(url, {
+    Authorization: `Bearer ${token}`,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
   const json = await res.json();
@@ -124,9 +139,9 @@ async function fetchConfigModels(baseUrl: string, token: string, usageProjectId:
 }
 
 async function fetchLlmModels(baseUrl: string, token: string, projectId: string) {
-  const res = await fetch(`${baseUrl}/llm/v1/models`, {
-    headers: { Authorization: `Bearer ${token}`, "OpenAI-Project": projectId },
-    redirect: "follow",
+  const res = await apiFetch(`${baseUrl}/llm/v1/models`, {
+    Authorization: `Bearer ${token}`,
+    "OpenAI-Project": projectId,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
   const json = await res.json();
@@ -137,9 +152,8 @@ async function fetchLlmModels(baseUrl: string, token: string, projectId: string)
 
 async function fetchUsage(baseUrl: string, token: string, usageProjectId: string, scope = "project") {
   const url = `${baseUrl}/api/v2/elitea_core/usage/prompt_lib/${usageProjectId}/usage?scope=${scope}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    redirect: "follow",
+  const res = await apiFetch(url, {
+    Authorization: `Bearer ${token}`,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
   return res.json();
@@ -154,13 +168,14 @@ export default async function (pi) {
   const token          =  process.env.ELITEA_API_TOKEN  || "";
   const projectId      =  process.env.ELITEA_PROJECT_ID || DEFAULT_PROJECT_ID;
   const usageProjectId =  process.env.ELITEA_USAGE_PROJECT_ID || "";
+  const offline          = isOfflineMode();
 
   // ---- Model discovery (rich → fallback → seed) ----------------------------
 
   let entries: any[]  = [];
   let configMeta: any = null;  // default model names from configurations API
 
-  if (token) {
+  if (token && !offline) {
     // Preferred: configurations API (rich metadata, accurate limits)
     if (usageProjectId) {
       try {
@@ -168,7 +183,9 @@ export default async function (pi) {
         entries    = items.map((item) => modelFromConfig(item, baseUrl, projectId));
         configMeta = meta;
       } catch (err) {
-        console.error(`[elitea] Configurations API failed (${err instanceof Error ? err.message : err}), trying /llm/v1/models.`);
+        // Discovery is optional; an unavailable gateway must not make startup
+        // look like a failed extension. The seed list below is still usable.
+        console.log(`[elitea] Configurations API unavailable (${err instanceof Error ? err.message : err}); using fallback discovery.`);
       }
     }
     // Fallback: basic list — no Claude routing or adaptive-thinking metadata here
@@ -176,14 +193,16 @@ export default async function (pi) {
       try {
         entries = await fetchLlmModels(baseUrl, token, projectId);
       } catch (err) {
-        console.error(`[elitea] Model discovery failed (${err instanceof Error ? err.message : err}). Using seed list.`);
+        console.log(`[elitea] Model discovery unavailable (${err instanceof Error ? err.message : err}); using seed list.`);
       }
     }
-  } else {
-    console.error(
+  } else if (!token) {
+    console.log(
       "[elitea] ELITEA_API_TOKEN is not set — using seed models.\n" +
       "         Get a PAT from: Settings → Personal Tokens → + → Generate."
     );
+  } else {
+    console.log("[elitea] Offline mode enabled — using seed models.");
   }
 
   // ---- Seed fallback -------------------------------------------------------
@@ -233,9 +252,11 @@ export default async function (pi) {
 
   if (usageProjectId) {
     registerUsageCommand(pi, getAuth);
-    registerUsageStatusBar(pi, getAuth);
+    // The status bar refreshes automatically, so keep it disabled in offline
+    // mode as well. The manual /elitea-usage command remains available.
+    if (!offline) registerUsageStatusBar(pi, getAuth);
   } else {
-    console.error(
+    console.log(
       "[elitea] ELITEA_USAGE_PROJECT_ID not set — /elitea-usage and status bar disabled.\n" +
       "         Set it to your numeric ELITEA project ID (e.g. ELITEA_USAGE_PROJECT_ID=5868)."
     );
@@ -432,9 +453,8 @@ function registerUsageCommand(pi, getAuth: () => { baseUrl: string; token: strin
 
       let data: any;
       try {
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
-          redirect: "follow",
+        const res = await apiFetch(url, {
+          Authorization: `Bearer ${token}`,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
         data = await res.json();
