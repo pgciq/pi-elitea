@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: publish-npm
+  cancel-in-progress: true
+
 jobs:
   publish:
     runs-on: ubuntu-latest
