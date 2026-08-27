@@ -61,10 +61,12 @@ pi --model elitea/eu.anthropic.claude-sonnet-5  "write a haiku"
 | Command | Description |
 |---|---|
 | `/elitea-models` | Full model table: display name, reasoning, vision, tier, context window, max output. |
+| `/elitea-capabilities [image\|video\|audio\|vision\|reasoning\|tools]` | List each ELITEA model's capabilities (vision / image / video / audio / tools / reasoning) read from its metadata; an optional filter narrows the table. |
 | `/elitea-usage [project\|user] [YYYYMM]` | Monthly spend, token breakdown, per-model and daily tables. |
 
 ```bash
 /elitea-models
+/elitea-capabilities image     # only image-generation models
 
 /elitea-usage                  # project scope, current month
 /elitea-usage user             # your personal usage

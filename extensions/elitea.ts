@@ -84,6 +84,23 @@ function modelFromConfig(item: any, baseUrl: string, projectId: string) {
       medium: "medium", high: "high", xhigh: "xhigh", max: "max",
     };
   }
+
+  // Surface the deployment's real capabilities (vision / image / audio /
+  // reasoning) so Pi and /elitea-capabilities reflect what it can do.
+  const supportsImageGen =
+    !!item.supports_image_generation ||
+    /^gpt-image/i.test(item.name) ||
+    /^dall-e/i.test(item.name);
+  const supportsAudio = /^whisper/i.test(item.name) || /-tts/i.test(item.name) || /^tts/i.test(item.name);
+  entry.capabilities = {
+    tools: true,
+    vision: !!item.supports_vision,
+    image: supportsImageGen,
+    video: !!item.supports_video,
+    audio: supportsAudio,
+    reasoning: !!item.supports_reasoning,
+  };
+
   return entry;
 }
 
@@ -119,6 +136,16 @@ function modelFromId(id: string, label?: string) {
       medium: "medium", high: "high", xhigh: "xhigh", max: "max",
     };
   }
+  const supportsImageGen = /^gpt-image/i.test(id) || /^dall-e/i.test(id);
+  const supportsAudio = /^whisper/i.test(id) || /-tts/i.test(id);
+  entry.capabilities = {
+    tools: true,
+    vision: false,
+    image: supportsImageGen,
+    video: false,
+    audio: supportsAudio,
+    reasoning,
+  };
   return entry;
 }
 
@@ -267,6 +294,7 @@ export default function (pi) {
   registerModelsCommand(pi, discovery,
     () => (pi.modelRegistry?.getAvailable?.() ?? []).filter((m) => m.provider === "elitea")
   );
+  registerCapabilitiesCommand(pi);
 
   if (usageProjectId) {
     registerUsageCommand(pi, getAuth);
@@ -327,6 +355,62 @@ function fmtTokens(n: any) {
 function fmtDate(iso: string | undefined) {
   if (!iso) return "—";
   return iso.replace("T", " ").replace(/(\+\d{2}:\d{2}|Z)$/, " UTC");
+}
+
+// ---------------------------------------------------------------------------
+// /elitea-capabilities — per-model capability table
+// ---------------------------------------------------------------------------
+
+function registerCapabilitiesCommand(pi) {
+  const flags = {
+    reasoning: "reasoning",
+    vision: "vision",
+    image: "image",
+    video: "video",
+    audio: "audio",
+    tools: "tools",
+  };
+
+  pi.registerCommand("elitea-capabilities", {
+    description: "List ELITEA model capabilities (vision/image/video/audio/tools/reasoning); e.g. /elitea-capabilities image",
+    handler: async (args, ctx) => {
+      const tokens = (args || "").trim().split(/\s+/).filter(Boolean);
+      const filter = tokens.find((token) => token in flags);
+      const models = (pi.modelRegistry?.getAvailable?.() ?? []).filter((m) => m.provider === "elitea");
+
+      const rows = models
+        .map((model) => {
+          const caps = model.capabilities ?? {};
+          return {
+            id: model.id,
+            reasoning: caps.reasoning ? "✓" : "",
+            vision: caps.vision ? "✓" : "",
+            image: caps.image ? "✓" : "",
+            video: caps.video ? "✓" : "",
+            audio: caps.audio ? "✓" : "",
+            tools: caps.tools ? "✓" : "",
+          };
+        })
+        .filter((row) => !filter || row[flags[filter]] === "✓")
+        .sort((a, b) => a.id.localeCompare(b.id));
+
+      const markdown = [
+        `# ELITEA model capabilities${filter ? ` (filter: ${filter})` : ""}`,
+        "",
+        "| Model | Reasoning | Vision | Image | Video | Audio | Tools |",
+        "|---|:---:|:---:|:---:|:---:|:---:|:---:|",
+        ...rows.map(
+          (row) =>
+            `| ${row.id} | ${row.reasoning || "—"} | ${row.vision || "—"} | ${row.image || "—"} | ${row.video || "—"} | ${row.audio || "—"} | ${row.tools || "—"} |`,
+        ),
+        "",
+        "_Capabilities are read from each model's ELITEA metadata (supports_reasoning / supports_vision / supports_image_generation / naming patterns)._",
+      ].join("\n");
+
+      outputMarkdown(pi, ctx, "elitea-capabilities", markdown);
+    },
+  });
+  makeMarkdownRenderer(pi, "elitea-capabilities");
 }
 
 // ---------------------------------------------------------------------------
