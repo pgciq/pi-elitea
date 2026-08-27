@@ -48,6 +48,14 @@ pi --model elitea/gpt-5.6-luna    "explain recursion"
 pi --model elitea/eu.anthropic.claude-sonnet-5  "write a haiku"
 ```
 
+## Model discovery (non-blocking)
+
+`pi-elitea` registers a **seed** model list synchronously at load (so pi starts instantly) and refreshes the full catalog **in the background** via pi's `refreshModels` callback — it never blocks startup on `GET /api/v2/configurations/models/{project}` or the LLM models endpoint.
+
+- The seed list is always available immediately, even offline or without `ELITEA_USAGE_PROJECT_ID`.
+- Background discovery (rich metadata: context window, vision/reasoning flags, tier) replaces the seed list once the API responds; the result is persisted to pi's provider cache so it survives restarts.
+- Every network call is bounded by a timeout and degrades to the seed list on any failure. Discovery can be skipped entirely with `ELITEA_OFFLINE=1`.
+
 ## Commands
 
 | Command | Description |
