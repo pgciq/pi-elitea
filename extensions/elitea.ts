@@ -163,70 +163,46 @@ async function fetchUsage(baseUrl: string, token: string, usageProjectId: string
 // Extension entry point
 // ---------------------------------------------------------------------------
 
-export default async function (pi) {
+// Seed model list used when live discovery is unavailable (startup / offline).
+function seedEntries() {
+  const ids = [
+    "gpt-5.4-mini", "gpt-5.4", "gpt-5.2", "gpt-5-mini", "gpt-5.6-luna",
+    "gpt-4.1", "gpt-4o-2024-11-20",
+    "eu.anthropic.claude-sonnet-4-6", "eu.anthropic.claude-sonnet-5",
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+  ];
+  if (process.env.ELITEA_MODEL) ids.unshift(process.env.ELITEA_MODEL);
+  return ids.map((id) => modelFromId(id));
+}
+
+export default function (pi) {
   const baseUrl        = (process.env.ELITEA_BASE_URL   || DEFAULT_ELITEA_URL).replace(/\/+$/, "");
   const token          =  process.env.ELITEA_API_TOKEN  || "";
   const projectId      =  process.env.ELITEA_PROJECT_ID || DEFAULT_PROJECT_ID;
   const usageProjectId =  process.env.ELITEA_USAGE_PROJECT_ID || "";
   const offline          = isOfflineMode();
 
-  // ---- Model discovery (rich → fallback → seed) ----------------------------
-
-  let entries: any[]  = [];
-  let configMeta: any = null;  // default model names from configurations API
-
-  if (token && !offline) {
-    // Preferred: configurations API (rich metadata, accurate limits)
-    if (usageProjectId) {
-      try {
-        const { items, meta } = await fetchConfigModels(baseUrl, token, usageProjectId);
-        entries    = items.map((item) => modelFromConfig(item, baseUrl, projectId));
-        configMeta = meta;
-      } catch (err) {
-        // Discovery is optional; an unavailable gateway must not make startup
-        // look like a failed extension. The seed list below is still usable.
-        console.log(`[elitea] Configurations API unavailable (${err instanceof Error ? err.message : err}); using fallback discovery.`);
-      }
-    }
-    // Fallback: basic list — no Claude routing or adaptive-thinking metadata here
-    if (entries.length === 0) {
-      try {
-        entries = await fetchLlmModels(baseUrl, token, projectId);
-      } catch (err) {
-        console.log(`[elitea] Model discovery unavailable (${err instanceof Error ? err.message : err}); using seed list.`);
-      }
-    }
-  } else if (!token) {
+  if (!token) {
     console.log(
       "[elitea] ELITEA_API_TOKEN is not set — using seed models.\n" +
       "         Get a PAT from: Settings → Personal Tokens → + → Generate."
     );
-  } else {
+  } else if (offline) {
     console.log("[elitea] Offline mode enabled — using seed models.");
   }
 
-  // ---- Seed fallback -------------------------------------------------------
+  // Initial models come from the seed list so Pi is usable immediately. Live
+  // discovery (configurations API → llm/v1/models) runs in the background via
+  // refreshModels and never blocks startup. `discovery` is shared with the
+  // /elitea-models command so tier/default metadata stays accurate post-discovery.
+  const discovery: { entries: any[]; configMeta: any } = { entries: seedEntries(), configMeta: null };
 
-  if (entries.length === 0 && process.env.ELITEA_MODEL)
-    entries = [modelFromId(process.env.ELITEA_MODEL)];
-
-  if (entries.length === 0) {
-    entries = [
-      "gpt-5.4-mini", "gpt-5.4", "gpt-5.2", "gpt-5-mini", "gpt-5.6-luna",
-      "gpt-4.1", "gpt-4o-2024-11-20",
-      "eu.anthropic.claude-sonnet-4-6", "eu.anthropic.claude-sonnet-5",
-      "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
-    ].map((id) => modelFromId(id));
-  }
-
-  // ---- Provider registration -----------------------------------------------
-
-  const models = entries.map(({ _tier, _default, ...entry }) => {
-    // Claude uses anthropic-messages — don't add supportsReasoningEffort (triggers
-    // reasoning_effort → ELITEA converts to thinking.type:enabled → Bedrock 400).
-    if (entry.api === "anthropic-messages") return entry;
-    return { ...entry, compat: { ...entry.compat, supportsReasoningEffort: true } };
-  });
+  const modelsFromEntries = (es: any[]) =>
+    es.map(({ _tier, _default, ...entry }) => {
+      // Claude uses anthropic-messages — don't add supportsReasoningEffort.
+      if (entry.api === "anthropic-messages") return entry;
+      return { ...entry, compat: { ...entry.compat, supportsReasoningEffort: true } };
+    });
 
   pi.registerProvider("elitea", {
     name: "ELITEA",
@@ -234,7 +210,49 @@ export default async function (pi) {
     api: "openai-completions",
     apiKey: "$ELITEA_API_TOKEN",
     headers: { "OpenAI-Project": projectId },
-    models,
+    models: modelsFromEntries(discovery.entries),
+
+    async refreshModels({ signal, stored, publish, allowNetwork, credential }) {
+      const cached = Array.isArray(stored?.models) ? stored.models : undefined;
+      const seed = modelsFromEntries(seedEntries());
+      // Pi's cache-only startup phase, or a cancelled refresh: return what we
+      // already have without touching the network.
+      if (allowNetwork === false || signal?.aborted) return cached?.length ? cached : seed;
+
+      const apiToken = credential?.key ?? token;
+      if (!apiToken || offline) return cached?.length ? cached : seed;
+
+      let entries: any[] = [];
+      try {
+        // Preferred: configurations API (rich metadata, accurate limits)
+        if (usageProjectId) {
+          const { items, meta } = await fetchConfigModels(baseUrl, apiToken, usageProjectId);
+          entries = items.map((item) => modelFromConfig(item, baseUrl, projectId));
+          discovery.entries = entries;
+          discovery.configMeta = meta;
+        }
+        // Fallback: basic OpenAI list — no Claude routing / adaptive-thinking metadata
+        if (entries.length === 0) {
+          entries = await fetchLlmModels(baseUrl, apiToken, projectId);
+          discovery.entries = entries;
+        }
+      } catch (err) {
+        // Discovery is optional; an unavailable gateway must not make startup
+        // look like a failed extension. Keep the last good list.
+        console.log(`[elitea] Model discovery unavailable (${err instanceof Error ? err.message : err}); keeping previous list.`);
+        entries = [];
+      }
+
+      const resolved = entries.length > 0 ? entries
+        : (process.env.ELITEA_MODEL ? [modelFromId(process.env.ELITEA_MODEL)] : []);
+      const out = modelsFromEntries(resolved.length > 0 ? resolved : seedEntries());
+      if (out.length > 0) {
+        // Persist the catalog so it survives restarts & offline starts.
+        await publish({ persist: { provider: "elitea", models: out } });
+        return out;
+      }
+      return cached?.length ? cached : seed;
+    },
   });
 
   // ---- Commands & status bar -----------------------------------------------
@@ -245,8 +263,8 @@ export default async function (pi) {
     usageProjectId,
   });
 
-  // Pass enriched entries (with _tier/_default) to the models command
-  registerModelsCommand(pi, entries, configMeta,
+  // Pass the live discovery state (updated in refreshModels) to the models command
+  registerModelsCommand(pi, discovery,
     () => (pi.modelRegistry?.getAvailable?.() ?? []).filter((m) => m.provider === "elitea")
   );
 
@@ -315,30 +333,31 @@ function fmtDate(iso: string | undefined) {
 // /elitea-models — full model table with tier/vision/default info
 // ---------------------------------------------------------------------------
 
-function registerModelsCommand(pi, rawEntries: any[], configMeta: any, getRegistered: () => any[]) {
+function registerModelsCommand(pi, discovery: { entries: any[]; configMeta: any }, getRegistered: () => any[]) {
   pi.registerCommand("elitea-models", {
     description: "List available ELITEA models with metadata (tier, vision, context window).",
     handler: async (_args, ctx) => {
-      // Prefer the live registry (post-startup), fall back to entries from factory
+      // Prefer the live registry (post-startup), fall back to the entries
+      // captured by the factory / refreshed in refreshModels.
       const live = getRegistered();
-      const rows = (live.length > 0 ? live : rawEntries)
+      const rows = (live.length > 0 ? live : discovery.entries)
         .slice()
         .sort((a, b) => a.id.localeCompare(b.id));
 
-      // Build a lookup for tier/default/vision from rawEntries
+      // Build a lookup for tier/default/vision from the captured entries
       const meta: Record<string, any> = {};
-      for (const e of rawEntries) meta[e.id] = e;
+      for (const e of discovery.entries) meta[e.id] = e;
 
       const lines = [
         "# ELITEA models",
         "",
       ];
 
-      if (configMeta?.default_model_name) {
+      if (discovery.configMeta?.default_model_name) {
         lines.push(
-          `_Default: **${configMeta.default_model_name}** · ` +
-          `Low-tier default: **${configMeta.low_tier_default_model_name ?? "—"}** · ` +
-          `High-tier default: **${configMeta.high_tier_default_model_name ?? "—"}**_`,
+          `_Default: **${discovery.configMeta.default_model_name}** · ` +
+          `Low-tier default: **${discovery.configMeta.low_tier_default_model_name ?? "—"}** · ` +
+          `High-tier default: **${discovery.configMeta.high_tier_default_model_name ?? "—"}**_`,
           ""
         );
       }
