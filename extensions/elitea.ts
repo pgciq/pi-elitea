@@ -356,7 +356,7 @@ export default function (pi) {
 
   const appendImage = (image) => pi.appendEntry("elitea-generated-image", image);
   const streamElitea = makeEliteaStream(baseUrl, token, projectId, appendImage);
-  pi.registerEntryRenderer("elitea-generated-image", (entry, _options, theme) => {
+  pi.registerEntryRenderer?.("elitea-generated-image", (entry, _options, theme) => {
     const image = entry.data ?? {};
     // pi passes an entry-renderer `theme` that lacks `fallbackColor()`, which
     // `Image.render` calls. Wrap it so inline previews render and never throw.
@@ -481,7 +481,7 @@ function makeMarkdownRenderer(pi, key: string) {
   try {
     const { getMarkdownTheme } = require("@earendil-works/pi-coding-agent");
     const { Markdown }         = require("@earendil-works/pi-tui");
-    pi.registerEntryRenderer(key, (entry) =>
+    pi.registerEntryRenderer?.(key, (entry) =>
       new Markdown(entry.data.markdown, 1, 0, getMarkdownTheme())
     );
   } catch { /* optional */ }
