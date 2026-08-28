@@ -21,8 +21,15 @@
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Image, Markdown } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+
+// Convert an absolute path to a clickable Markdown link. The TUI renders
+// `[label](url)` as an OSC 8 hyperlink, so the saved file opens in one click.
+function fileLink(p, label = p) {
+  return `[${label}](${pathToFileURL(String(p)).href})`;
+}
 
 const openAICompletionsApi = await (async () => {
   try {
@@ -280,7 +287,7 @@ function streamEliteaImage(model, context, options, baseUrl, token, projectId, a
       const image = payload?.data?.[0];
       if (!image) throw new Error("ELITEA image API returned no image data");
       const saved = await saveEliteaImage(image, model.id);
-      const text = `Generated image saved to: ${saved.path}`;
+      const text = `Generated image saved to: ${fileLink(saved.path)}`;
       output.content.push({ type: "text", text });
       stream.push({ type: "text_start", contentIndex: 0, partial: output });
       stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: output });
@@ -351,11 +358,16 @@ export default function (pi) {
   const streamElitea = makeEliteaStream(baseUrl, token, projectId, appendImage);
   pi.registerEntryRenderer("elitea-generated-image", (entry, _options, theme) => {
     const image = entry.data ?? {};
+    // pi passes an entry-renderer `theme` that lacks `fallbackColor()`, which
+    // `Image.render` calls. Wrap it so inline previews render and never throw.
+    const imageTheme = theme && typeof theme.fallbackColor === "function"
+      ? theme
+      : { fallbackColor: (s) => (theme && theme.fg ? theme.fg("toolOutput", s) : s) };
     try {
       const data = readFileSync(image.path).toString("base64");
-      return new Image(data, image.mimeType || "image/png", theme, { maxWidthCells: 80, maxHeightCells: 30 });
+      return new Image(data, image.mimeType || "image/png", imageTheme, { maxWidthCells: 80, maxHeightCells: 30 });
     } catch {
-      return new Markdown(`Generated image unavailable: ${image.path ?? "unknown path"}`, 1, 0, theme);
+      return new Markdown(`Generated image unavailable: ${fileLink(image.path ?? "unknown path")}`, 1, 0, theme);
     }
   });
 

@@ -58,7 +58,7 @@ pi --model elitea/eu.anthropic.claude-sonnet-5  "write a haiku"
 
 ### Image generation
 
-ELITEA exposes `gpt-image-1.5` through `POST /llm/v1/images/generations` (not chat completions). The extension supplements the rich configuration catalog with image models from `/llm/v1/models`, calls the verified image endpoint, saves results under `.pi/generated-images/`, and adds a TUI-only `Image` entry for supported terminals. Print/RPC mode reports the saved path.
+ELITEA exposes `gpt-image-1.5` through `POST /llm/v1/images/generations` (not chat completions). The extension supplements the rich configuration catalog with image models from `/llm/v1/models`, calls the verified image endpoint, saves results under `.pi/generated-images/`, reports the saved path as a clickable `file://` link in the TUI, and adds a TUI-only `Image` entry for supported terminals. Print/RPC mode reports the saved path as plain text.
 
 The standard model catalog also advertises `gpt-4o-mini-transcribe` (ASR) and `gpt-4o-mini-tts` (TTS). The corresponding OpenAI-compatible paths are `/llm/v1/audio/transcriptions` and `/llm/v1/audio/speech`; requests with the current workspace token returned `403 Forbidden`, so ASR/TTS remain discovery-only until endpoint access is confirmed.
 
