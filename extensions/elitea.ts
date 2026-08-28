@@ -18,6 +18,28 @@
 //
 // All models are served through ELITEA's OpenAI-compatible gateway.
 
+import { readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Image, Markdown } from "@earendil-works/pi-tui";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+
+const openAICompletionsApi = await (async () => {
+  try {
+    return (await import("@earendil-works/pi-ai/api/openai-completions.lazy")).openAICompletionsApi;
+  } catch {
+    return (await import("@earendil-works/pi-ai")).openAICompletionsApi;
+  }
+})();
+
+const anthropicMessagesApi = await (async () => {
+  try {
+    return (await import("@earendil-works/pi-ai/api/anthropic-messages.lazy")).anthropicMessagesApi;
+  } catch {
+    return (await import("@earendil-works/pi-ai")).anthropicMessagesApi;
+  }
+})();
+
 const DEFAULT_ELITEA_URL = "https://next.elitea.ai";
 const DEFAULT_PROJECT_ID = "1";
 // Model discovery runs during extension initialization. Keep an unavailable
@@ -105,7 +127,7 @@ function modelFromConfig(item: any, baseUrl: string, projectId: string) {
 }
 
 // Fallback: used when configurations API is unavailable
-const SKIP_PATTERNS = [/embedding/i, /-tts($|-)/i, /transcribe/i, /^gpt-image/i, /^dall-e/i, /^whisper/i];
+const SKIP_PATTERNS = [/embedding/i, /-tts($|-)/i, /transcribe/i, /^whisper/i];
 
 function isChatModel(id: string) { return !SKIP_PATTERNS.some((p) => p.test(id)); }
 
@@ -187,6 +209,107 @@ async function fetchUsage(baseUrl: string, token: string, usageProjectId: string
 }
 
 // ---------------------------------------------------------------------------
+// Image generation + TUI echo
+// ---------------------------------------------------------------------------
+
+function latestTextPrompt(context) {
+  const messages = Array.isArray(context?.messages) ? context.messages : [];
+  const user = [...messages].reverse().find((message) => message?.role === "user");
+  if (!user) return "";
+  if (typeof user.content === "string") return user.content;
+  return (user.content ?? [])
+    .filter((part) => part?.type === "text")
+    .map((part) => part.text ?? "")
+    .join("\n");
+}
+
+async function saveEliteaImage(image, modelId) {
+  const directory = join(process.cwd(), ".pi", "generated-images");
+  await mkdir(directory, { recursive: true });
+  const mimeType = image?.mime_type ?? image?.mimeType ?? "image/png";
+  const extension = mimeType.includes("jpeg") ? "jpg" : mimeType.includes("webp") ? "webp" : "png";
+  const filePath = join(directory, `elitea-${modelId}-${Date.now()}.${extension}`);
+  if (image?.b64_json) {
+    await writeFile(filePath, Buffer.from(image.b64_json, "base64"));
+  } else if (image?.url) {
+    const response = await fetch(image.url);
+    if (!response.ok) throw new Error(`Unable to download ELITEA image: HTTP ${response.status}`);
+    await writeFile(filePath, Buffer.from(await response.arrayBuffer()));
+  } else {
+    throw new Error("ELITEA image API returned neither url nor b64_json");
+  }
+  return { path: filePath, mimeType };
+}
+
+function baseAssistantOutput(model) {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "pending",
+    timestamp: Date.now(),
+  };
+}
+
+function streamEliteaImage(model, context, options, baseUrl, token, projectId, appendImage) {
+  const stream = createAssistantMessageEventStream();
+  const output = baseAssistantOutput(model);
+  (async () => {
+    try {
+      stream.push({ type: "start", partial: output });
+      const prompt = latestTextPrompt(context);
+      if (!prompt) throw new Error("Image generation requires a text prompt");
+      const response = await fetch(`${baseUrl}/llm/v1/images/generations`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "OpenAI-Project": projectId,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model: model.id, prompt, n: 1, size: "1024x1024" }),
+        signal: options?.signal,
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error?.message ?? `ELITEA image API HTTP ${response.status}`);
+      const image = payload?.data?.[0];
+      if (!image) throw new Error("ELITEA image API returned no image data");
+      const saved = await saveEliteaImage(image, model.id);
+      const text = `Generated image saved to: ${saved.path}`;
+      output.content.push({ type: "text", text });
+      stream.push({ type: "text_start", contentIndex: 0, partial: output });
+      stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: output });
+      stream.push({ type: "text_end", contentIndex: 0, content: text, partial: output });
+      appendImage(saved);
+      output.stopReason = "stop";
+      stream.push({ type: "done", reason: "stop", message: output });
+      stream.end();
+    } catch (error) {
+      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      output.errorMessage = error instanceof Error ? error.message : String(error);
+      stream.push({ type: "error", reason: output.stopReason, error: output });
+      stream.end();
+    }
+  })();
+  return stream;
+}
+
+function makeEliteaStream(baseUrl, token, projectId, appendImage) {
+  return (model, context, options) => {
+    if (model?.capabilities?.image) {
+      return streamEliteaImage(model, context, options, baseUrl, token, projectId, appendImage);
+    }
+    if (model?.api === "anthropic-messages") return anthropicMessagesApi().streamSimple(model, context, options);
+    return openAICompletionsApi().streamSimple(model, context, options);
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Extension entry point
 // ---------------------------------------------------------------------------
 
@@ -224,6 +347,18 @@ export default function (pi) {
   // /elitea-models command so tier/default metadata stays accurate post-discovery.
   const discovery: { entries: any[]; configMeta: any } = { entries: seedEntries(), configMeta: null };
 
+  const appendImage = (image) => pi.appendEntry("elitea-generated-image", image);
+  const streamElitea = makeEliteaStream(baseUrl, token, projectId, appendImage);
+  pi.registerEntryRenderer("elitea-generated-image", (entry, _options, theme) => {
+    const image = entry.data ?? {};
+    try {
+      const data = readFileSync(image.path).toString("base64");
+      return new Image(data, image.mimeType || "image/png", theme, { maxWidthCells: 80, maxHeightCells: 30 });
+    } catch {
+      return new Markdown(`Generated image unavailable: ${image.path ?? "unknown path"}`, 1, 0, theme);
+    }
+  });
+
   const modelsFromEntries = (es: any[]) =>
     es.map(({ _tier, _default, ...entry }) => {
       // Claude uses anthropic-messages — don't add supportsReasoningEffort.
@@ -237,6 +372,7 @@ export default function (pi) {
     api: "openai-completions",
     apiKey: "$ELITEA_API_TOKEN",
     headers: { "OpenAI-Project": projectId },
+    streamSimple: streamElitea,
     models: modelsFromEntries(discovery.entries),
 
     async refreshModels({ signal, stored, publish, allowNetwork, credential }) {
@@ -255,6 +391,22 @@ export default function (pi) {
         if (usageProjectId) {
           const { items, meta } = await fetchConfigModels(baseUrl, apiToken, usageProjectId);
           entries = items.map((item) => modelFromConfig(item, baseUrl, projectId));
+          // The rich configurations API currently omits image deployments,
+          // while /llm/v1/models exposes gpt-image-1.5. Merge image models
+          // from the standard catalog without replacing the richer entries.
+          try {
+            const standardEntries = await fetchLlmModels(baseUrl, apiToken, projectId);
+            const known = new Set(entries.map((entry) => entry.id));
+            for (const entry of standardEntries) {
+              if (entry.capabilities?.image && !known.has(entry.id)) {
+                entries.push(entry);
+                known.add(entry.id);
+              }
+            }
+          } catch {
+            // Rich configuration discovery remains usable if the supplemental
+            // standard model list is unavailable.
+          }
           discovery.entries = entries;
           discovery.configMeta = meta;
         }

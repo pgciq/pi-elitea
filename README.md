@@ -56,6 +56,12 @@ pi --model elitea/eu.anthropic.claude-sonnet-5  "write a haiku"
 - Background discovery (rich metadata: context window, vision/reasoning flags, tier) replaces the seed list once the API responds; the result is persisted to pi's provider cache so it survives restarts.
 - Every network call is bounded by a timeout and degrades to the seed list on any failure. Discovery can be skipped entirely with `ELITEA_OFFLINE=1`.
 
+### Image generation
+
+ELITEA exposes `gpt-image-1.5` through `POST /llm/v1/images/generations` (not chat completions). The extension supplements the rich configuration catalog with image models from `/llm/v1/models`, calls the verified image endpoint, saves results under `.pi/generated-images/`, and adds a TUI-only `Image` entry for supported terminals. Print/RPC mode reports the saved path.
+
+The standard model catalog also advertises `gpt-4o-mini-transcribe` (ASR) and `gpt-4o-mini-tts` (TTS). The corresponding OpenAI-compatible paths are `/llm/v1/audio/transcriptions` and `/llm/v1/audio/speech`; requests with the current workspace token returned `403 Forbidden`, so ASR/TTS remain discovery-only until endpoint access is confirmed.
+
 ## Commands
 
 | Command | Description |
