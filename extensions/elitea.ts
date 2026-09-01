@@ -458,7 +458,7 @@ export default function (pi) {
   registerModelsCommand(pi, discovery,
     () => (pi.modelRegistry?.getAvailable?.() ?? []).filter((m) => m.provider === "elitea")
   );
-  registerCapabilitiesCommand(pi);
+  registerCapabilitiesCommand(pi, () => discovery.entries);
 
   if (usageProjectId) {
     registerUsageCommand(pi, getAuth);
@@ -525,7 +525,7 @@ function fmtDate(iso: string | undefined) {
 // /elitea-capabilities — per-model capability table
 // ---------------------------------------------------------------------------
 
-function registerCapabilitiesCommand(pi) {
+function registerCapabilitiesCommand(pi, getDiscovered = () => []) {
   const flags = {
     reasoning: "reasoning",
     vision: "vision",
@@ -540,9 +540,18 @@ function registerCapabilitiesCommand(pi) {
     handler: async (args, ctx) => {
       const tokens = (args || "").trim().split(/\s+/).filter(Boolean);
       const filter = tokens.find((token) => token in flags);
-      const models = (pi.modelRegistry?.getAvailable?.() ?? []).filter((m) => m.provider === "elitea");
+      // `getAvailable()` only returns models when the provider has resolved
+      // credentials. That makes this command render an empty table when the
+      // token is missing/being resolved, even though seed/discovered models
+      // are registered. Capabilities are catalog metadata, so use getAll().
+      // The model registry is exposed on the command context, not on the
+      // ExtensionAPI (`pi`). Reading `pi.modelRegistry` therefore always
+      // produced an empty list in this command.
+      const registered = ctx.modelRegistry?.getAll?.() ?? [];
+      const models = registered.filter((m) => m.provider === "elitea");
+      const catalog = models.length > 0 ? models : getDiscovered();
 
-      const rows = models
+      const rows = catalog
         .map((model) => {
           const caps = model.capabilities ?? {};
           return {
