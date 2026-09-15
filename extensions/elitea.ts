@@ -33,22 +33,6 @@ function fileLink(p, label = p) {
   return `[${label}](${pathToFileURL(String(p)).href})`;
 }
 
-const openAICompletionsApi = await (async () => {
-  try {
-    return (await import("@earendil-works/pi-ai/api/openai-completions.lazy")).openAICompletionsApi;
-  } catch {
-    return (await import("@earendil-works/pi-ai")).openAICompletionsApi;
-  }
-})();
-
-const anthropicMessagesApi = await (async () => {
-  try {
-    return (await import("@earendil-works/pi-ai/api/anthropic-messages.lazy")).anthropicMessagesApi;
-  } catch {
-    return (await import("@earendil-works/pi-ai")).anthropicMessagesApi;
-  }
-})();
-
 const DEFAULT_ELITEA_URL = "https://next.elitea.ai";
 const DEFAULT_PROJECT_ID = "1";
 // Model discovery runs during extension initialization. Keep an unavailable
