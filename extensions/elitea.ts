@@ -24,6 +24,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Image, Markdown } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 
 // Convert an absolute path to a clickable Markdown link. The TUI renders
 // `[label](url)` as an OSC 8 hyperlink, so the saved file opens in one click.
