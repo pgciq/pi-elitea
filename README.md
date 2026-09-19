@@ -92,6 +92,8 @@ While an `elitea/*` model is active, the footer shows a live spend indicator ref
 |---|---|---|
 | `elitea` | `{ELITEA_BASE_URL}/llm/v1` | `Authorization: Bearer $ELITEA_API_TOKEN` + `OpenAI-Project: {id}` |
 
+Claude models use the same OpenAI-compatible `/llm/v1/chat/completions` route as other ELITEA models. This avoids the native Anthropic `/messages` route, which may require a separate authentication configuration in LiteLLM deployments.
+
 ## Development
 
 ```bash

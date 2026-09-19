@@ -64,7 +64,6 @@ function needsAdaptiveThinking(name: string) {
 
 function modelFromConfig(item: any, baseUrl: string, projectId: string) {
   const isClaude = /claude/i.test(item.name);
-  const adaptive = isClaude && needsAdaptiveThinking(item.name);
 
   const entry: any = {
     id:            item.name,
@@ -79,16 +78,15 @@ function modelFromConfig(item: any, baseUrl: string, projectId: string) {
   };
 
   if (isClaude) {
-    // Route all Claude models to native Anthropic Messages protocol.
-    // ELITEA accepts Authorization: Bearer at /llm/v1/messages (ignores x-api-key).
-    entry.api     = "anthropic-messages";
-    // pi appends /v1/messages to baseUrl, so use /llm (not /llm/v1)
-    // → https://next.elitea.ai/llm/v1/messages  ✓
-    entry.baseUrl = `${baseUrl}/llm`;
-    entry.headers = { Authorization: "Bearer $ELITEA_API_TOKEN", "OpenAI-Project": projectId };
+    // Route Claude through ELITEA's OpenAI-compatible endpoint.  The native
+    // Anthropic Messages endpoint expects a different credential setup on
+    // some LiteLLM deployments, while /llm/v1/chat/completions accepts the
+    // ELITEA/LiteLLM Virtual Key configured as ELITEA_API_TOKEN.
+    // Keep the provider-level baseUrl and headers so this model uses the same
+    // OpenAI-compatible route as the other ELITEA models.
     entry.compat = {
+      // Claude/Bedrock deployments may not support eager tool-input chunks.
       supportsEagerToolInputStreaming: false,
-      ...(adaptive ? { forceAdaptiveThinking: true } : {}),
     };
   }
 
@@ -358,9 +356,13 @@ export default function (pi) {
 
   const modelsFromEntries = (es: any[]) =>
     es.map(({ _tier, _default, ...entry }) => {
-      // Claude uses anthropic-messages — don't add supportsReasoningEffort.
+      // ELITEA's OpenAI-compatible gateway may route a reasoning_effort
+      // request to Bedrock as `thinking`. That parameter is not accepted by
+      // models such as gpt-5.6-luna, even when the model metadata advertises
+      // reasoning. Keep the capability for Pi's UI, but do not send the
+      // provider-specific reasoning_effort parameter for OpenAI models.
       if (entry.api === "anthropic-messages") return entry;
-      return { ...entry, compat: { ...entry.compat, supportsReasoningEffort: true } };
+      return { ...entry, compat: { ...entry.compat, supportsReasoningEffort: false } };
     });
 
   pi.registerProvider("elitea", {
@@ -377,10 +379,12 @@ export default function (pi) {
       const seed = modelsFromEntries(seedEntries());
       // Pi's cache-only startup phase, or a cancelled refresh: return what we
       // already have without touching the network.
-      if (allowNetwork === false || signal?.aborted) return cached?.length ? cached : seed;
+      if (allowNetwork === false || signal?.aborted) {
+        return cached?.length ? modelsFromEntries(cached) : seed;
+      }
 
       const apiToken = credential?.key ?? token;
-      if (!apiToken || offline) return cached?.length ? cached : seed;
+      if (!apiToken || offline) return cached?.length ? modelsFromEntries(cached) : seed;
 
       let entries: any[] = [];
       try {
@@ -427,7 +431,7 @@ export default function (pi) {
         await publish({ persist: { provider: "elitea", models: out } });
         return out;
       }
-      return cached?.length ? cached : seed;
+      return cached?.length ? modelsFromEntries(cached) : seed;
     },
   });
 
